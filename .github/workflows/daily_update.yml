@@ -1,0 +1,36 @@
+name: 更新 Market Monitor 儀表板
+
+on:
+  schedule:
+    # 08:30 UTC = 香港時間 16:30（逢星期一至五收市後執行）
+    - cron: "30 8 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-breadth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下載倉庫檔案
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝依賴套件
+        run: pip install -r requirements.txt
+
+      - name: 執行市場廣度計算腳本
+        run: python update_breadth.py
+
+      - name: 提交最新 data.json
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git diff --staged --quiet || git commit -m "自動更新 Market Monitor 數據"
+          git push
