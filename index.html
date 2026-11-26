@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>市場廣度監測儀表板 (Market Monitor)</title>
+  <title>港股通 Market Monitor 市場廣度儀表板</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -13,13 +13,16 @@
     <!-- 標題與市況狀態燈號 -->
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-800 pb-4">
       <div>
-        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Market Monitor 市場廣度儀表板</h1>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">港股通 Market Monitor 儀表板</h1>
         <p id="updatedAt" class="text-sm text-slate-400 mt-1">正在載入最新數據...</p>
       </div>
       <div id="regimeBadge" class="px-4 py-2 rounded-full text-sm font-semibold w-fit bg-slate-800">
         載入中...
       </div>
     </div>
+
+    <!-- 市況轉折與異常提示區（有訊號時自動顯示） -->
+    <div id="alertsContainer" class="hidden space-y-2"></div>
 
     <!-- 關鍵指標卡片 -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -30,12 +33,15 @@
           <span class="text-slate-600 mx-1">/</span>
           <span id="kpiDown4" class="text-rose-400">-</span>
         </div>
-        <div id="kpiDownPct" class="text-xs text-slate-400 mt-1">跌 4% 佔活躍股：-</div>
+        <div id="kpiUpDownPct" class="text-xs text-slate-400 mt-1">佔活躍股：-</div>
       </div>
 
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
         <div class="text-xs text-slate-400">5 日動能比率</div>
-        <div id="kpiRatio5d" class="mt-2 text-2xl font-bold text-sky-400">-</div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span id="kpiRatio5d" class="text-2xl font-bold text-sky-400">-</span>
+          <span id="kpiRatioDiff" class="text-xs font-semibold"></span>
+        </div>
         <div class="text-xs text-slate-400 mt-1">多頭 &ge; 2.0 ｜ 偏空 &lt; 1.0</div>
       </div>
 
@@ -53,6 +59,68 @@
         <div class="text-xs text-slate-400">站上 40 日均線比例</div>
         <div id="kpiSma40" class="mt-2 text-2xl font-bold text-amber-400">-</div>
         <div id="kpiActive" class="text-xs text-slate-400 mt-1">當日活躍股數：-</div>
+      </div>
+    </div>
+
+    <!-- 當日候選股掃描清單（依市況自動把優先清單排在前面） -->
+    <div class="space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h2 class="text-lg font-bold text-slate-100">當日候選股掃描清單</h2>
+        <p class="text-xs text-slate-400">點擊代碼可直接開啟 TradingView 圖表</p>
+      </div>
+
+      <div id="candidatesGrid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 放量突破清單 -->
+        <div id="breakoutCard" class="bg-slate-900 border border-slate-800 rounded-xl p-4 overflow-x-auto">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="text-sm font-semibold text-emerald-400">
+                放量突破（Breakout）
+                <span id="breakoutCount" class="ml-1 text-xs text-slate-400">(0)</span>
+              </h3>
+              <p class="text-xs text-slate-500 mt-0.5">升 4%+、破 20 日高、量比 &ge; 1.5、站上 20/50MA</p>
+            </div>
+            <span id="breakoutTag" class="hidden text-xs px-2.5 py-1 rounded-full font-semibold"></span>
+          </div>
+          <table class="w-full text-sm text-left border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 text-slate-400 text-xs">
+                <th class="py-2 px-2">標的</th>
+                <th class="py-2 px-2 text-right">收盤價</th>
+                <th class="py-2 px-2 text-right">升幅</th>
+                <th class="py-2 px-2 text-right">量比</th>
+                <th class="py-2 px-2 text-right">強弱備註</th>
+              </tr>
+            </thead>
+            <tbody id="breakoutTableBody" class="divide-y divide-slate-800/60"></tbody>
+          </table>
+        </div>
+
+        <!-- 超跌反轉清單 -->
+        <div id="reversalCard" class="bg-slate-900 border border-slate-800 rounded-xl p-4 overflow-x-auto">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="text-sm font-semibold text-sky-400">
+                超跌反轉（Reversal）
+                <span id="reversalCount" class="ml-1 text-xs text-slate-400">(0)</span>
+              </h3>
+              <p class="text-xs text-slate-500 mt-0.5">15 日回調 &ge; 10%、收陽升 3%+、量比 &ge; 1.2</p>
+            </div>
+            <span id="reversalTag" class="hidden text-xs px-2.5 py-1 rounded-full font-semibold"></span>
+          </div>
+          <table class="w-full text-sm text-left border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 text-slate-400 text-xs">
+                <th class="py-2 px-2">標的</th>
+                <th class="py-2 px-2 text-right">收盤價</th>
+                <th class="py-2 px-2 text-right">升幅</th>
+                <th class="py-2 px-2 text-right">量比</th>
+                <th class="py-2 px-2 text-right">超跌幅度</th>
+              </tr>
+            </thead>
+            <tbody id="reversalTableBody" class="divide-y divide-slate-800/60"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -93,10 +161,59 @@
         <tbody id="historyTableBody" class="divide-y divide-slate-800/60"></tbody>
       </table>
     </div>
+
+    <!-- 收市文字摘要報告（附一鍵複製） -->
+    <div id="summarySection" class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-slate-300">每日收市摘要報告</h2>
+        <button id="copySummaryBtn"
+                class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors">
+          一鍵複製摘要
+        </button>
+      </div>
+      <pre id="summaryText" class="text-xs md:text-sm text-slate-300 bg-slate-950/70 border border-slate-800/80 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap leading-relaxed font-mono">載入中...</pre>
+    </div>
+
   </div>
 
   <script>
     const fmt = (val, digits = 2) => (val === null || val === undefined ? "N/A" : Number(val).toFixed(digits));
+
+    function getTradingViewUrl(ticker) {
+      if (ticker.endsWith(".HK")) {
+        const num = parseInt(ticker.replace(".HK", ""), 10);
+        return `https://www.tradingview.com/chart/?symbol=HKEX:${num}`;
+      }
+      return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`;
+    }
+
+    function renderCandidateTable(tbodyId, items, emptyText) {
+      const tbody = document.getElementById(tbodyId);
+      if (!items || !items.length) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" class="py-6 text-center text-slate-500 text-xs">${emptyText}</td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = items.map(item => `
+        <tr class="hover:bg-slate-800/50 transition-colors">
+          <td class="py-2 px-2">
+            <a href="${getTradingViewUrl(item.ticker)}" target="_blank" rel="noopener noreferrer"
+               class="font-mono font-semibold text-slate-200 hover:text-emerald-400 underline decoration-slate-700 underline-offset-2">
+              ${item.ticker}
+            </a>
+            ${item.name ? `<div class="text-xs text-slate-400">${item.name}</div>` : ""}
+          </td>
+          <td class="py-2 px-2 text-right font-mono text-slate-200">${fmt(item.close, 2)}</td>
+          <td class="py-2 px-2 text-right font-mono font-semibold text-emerald-400">+${fmt(item.change_pct, 2)}%</td>
+          <td class="py-2 px-2 text-right font-mono text-amber-300">${fmt(item.vol_ratio, 2)}x</td>
+          <td class="py-2 px-2 text-right text-xs text-slate-300">${item.metric_label || "-"}</td>
+        </tr>
+      `).join("");
+    }
 
     const regimeMap = {
       Bullish: {
@@ -119,6 +236,12 @@
       }
     };
 
+    const alertStyles = {
+      danger: "bg-rose-500/15 border-rose-500/40 text-rose-200",
+      warning: "bg-amber-500/15 border-amber-500/40 text-amber-200",
+      success: "bg-emerald-500/15 border-emerald-500/40 text-emerald-200"
+    };
+
     async function loadDashboard() {
       const res = await fetch(`./data.json?t=${Date.now()}`);
       if (!res.ok) throw new Error("找不到 data.json，請先到 GitHub Actions 手動執行一次工作流程。");
@@ -127,6 +250,8 @@
       if (!history.length) return;
 
       const latest = history[history.length - 1];
+      const insights = data.insights || {};
+
       document.getElementById("updatedAt").textContent =
         `最新數據日期：${latest.Date} ｜ 更新時間：${data.updated_at} ｜ 股票池：${data.universe_size} 隻`;
 
@@ -136,11 +261,48 @@
       badge.textContent = regimeInfo.badge;
       badge.className = regimeInfo.badgeClass;
 
+      // 市況提示橫幅
+      const alerts = insights.alerts || [];
+      const alertsBox = document.getElementById("alertsContainer");
+      if (alerts.length > 0) {
+        alertsBox.classList.remove("hidden");
+        alertsBox.innerHTML = alerts.map(a => {
+          const style = alertStyles[a.level] || alertStyles.warning;
+          const icon = a.level === "danger" ? "🚨" : a.level === "success" ? "✅" : "⚠️";
+          return `
+            <div class="px-4 py-2.5 rounded-xl border text-sm flex items-center gap-2 ${style}">
+              <span>${icon}</span>
+              <span>${a.text}</span>
+            </div>
+          `;
+        }).join("");
+      }
+
       // 指標卡數值
       document.getElementById("kpiUp4").textContent = latest.Up_4pct;
       document.getElementById("kpiDown4").textContent = latest.Down_4pct;
-      document.getElementById("kpiDownPct").textContent = `跌 4% 佔活躍股：${fmt(latest.Down_4pct_Pct, 1)}%`;
+      const upPct = latest.Up_4pct_Pct !== undefined && latest.Up_4pct_Pct !== null
+        ? fmt(latest.Up_4pct_Pct, 1)
+        : (latest.Active_Stocks > 0 ? ((latest.Up_4pct / latest.Active_Stocks) * 100).toFixed(1) : "0.0");
+      document.getElementById("kpiUpDownPct").textContent =
+        `佔活躍股：升 ${upPct}% ｜ 跌 ${fmt(latest.Down_4pct_Pct, 1)}%`;
+
       document.getElementById("kpiRatio5d").textContent = fmt(latest.Ratio_5D, 2);
+      const diffEl = document.getElementById("kpiRatioDiff");
+      if (insights.ratio_5d_diff !== undefined && insights.ratio_5d_diff !== null) {
+        const d = Number(insights.ratio_5d_diff);
+        if (d > 0) {
+          diffEl.textContent = `▲ +${d.toFixed(2)}`;
+          diffEl.className = "text-xs font-semibold text-emerald-400";
+        } else if (d < 0) {
+          diffEl.textContent = `▼ ${d.toFixed(2)}`;
+          diffEl.className = "text-xs font-semibold text-rose-400";
+        } else {
+          diffEl.textContent = "▬ 0.00";
+          diffEl.className = "text-xs font-semibold text-slate-400";
+        }
+      }
+
       document.getElementById("kpiUp25").textContent = latest.Up_25pct_25D;
       document.getElementById("kpiDown25").textContent = latest.Down_25pct_25D;
       const net25 = latest.Up_25pct_25D - latest.Down_25pct_25D;
@@ -148,11 +310,47 @@
       document.getElementById("kpiSma40").textContent = `${fmt(latest.Pct_Above_40SMA, 1)}%`;
       document.getElementById("kpiActive").textContent = `當日活躍股數：${latest.Active_Stocks} 隻`;
 
+      // 候選股清單與依市況自動排序
+      const candidates = data.candidates || { breakouts: [], reversals: [] };
+      const breakouts = candidates.breakouts || [];
+      const reversals = candidates.reversals || [];
+
+      document.getElementById("breakoutCount").textContent = `(${breakouts.length})`;
+      document.getElementById("reversalCount").textContent = `(${reversals.length})`;
+
+      const bCard = document.getElementById("breakoutCard");
+      const rCard = document.getElementById("reversalCard");
+      const bTag = document.getElementById("breakoutTag");
+      const rTag = document.getElementById("reversalTag");
+
+      if (latest.Regime === "Correction") {
+        // 調整期：反轉清單自動排第一位
+        rCard.classList.add("order-1", "ring-1", "ring-sky-500/60");
+        bCard.classList.add("order-2");
+        rTag.textContent = "★ 調整期優先參考";
+        rTag.className = "text-xs px-2.5 py-1 rounded-full font-semibold bg-sky-500/20 text-sky-300";
+        bTag.textContent = "突破易失敗，慎追";
+        bTag.className = "text-xs px-2.5 py-1 rounded-full font-semibold bg-rose-500/15 text-rose-300";
+      } else if (latest.Regime === "Bullish") {
+        bCard.classList.add("order-1", "ring-1", "ring-emerald-500/60");
+        rCard.classList.add("order-2");
+        bTag.textContent = "★ 多頭市況優先";
+        bTag.className = "text-xs px-2.5 py-1 rounded-full font-semibold bg-emerald-500/20 text-emerald-300";
+      } else {
+        bTag.textContent = "震盪期精選";
+        bTag.className = "text-xs px-2.5 py-1 rounded-full font-semibold bg-amber-500/15 text-amber-300";
+        rTag.textContent = "短線快進快出";
+        rTag.className = "text-xs px-2.5 py-1 rounded-full font-semibold bg-amber-500/15 text-amber-300";
+      }
+
+      renderCandidateTable("breakoutTableBody", breakouts, "今日無符合放量突破條件的標的");
+      renderCandidateTable("reversalTableBody", reversals, "今日無符合超跌反轉條件的標的");
+
       const dates = history.map(d => d.Date.slice(5));
       const commonGrid = { color: "rgba(148, 163, 184, 0.1)" };
       const commonTicks = { color: "#94a3b8", maxTicksLimit: 10 };
 
-      // 圖表 1：買賣壓力雙向柱狀圖（綠升紅跌）
+      // 圖表 1：買賣壓力雙向柱狀圖
       new Chart(document.getElementById("dailyBarChart"), {
         type: "bar",
         data: {
@@ -238,7 +436,7 @@
         }
       });
 
-      // 近 15 個交易日明細表（由新到舊）
+      // 近 15 個交易日明細表
       const tbody = document.getElementById("historyTableBody");
       const last15 = [...history].slice(-15).reverse();
       tbody.innerHTML = last15.map(row => {
@@ -259,6 +457,22 @@
           </tr>
         `;
       }).join("");
+
+      // 收市文字摘要與一鍵複製按鈕
+      const summaryEl = document.getElementById("summaryText");
+      const copyBtn = document.getElementById("copySummaryBtn");
+      const summaryContent = insights.summary_text || "請先重新執行一次 GitHub Actions 以生成最新文字摘要。";
+      summaryEl.textContent = summaryContent;
+
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(summaryContent);
+          copyBtn.textContent = "已複製 ✓";
+          setTimeout(() => { copyBtn.textContent = "一鍵複製摘要"; }, 2000);
+        } catch {
+          copyBtn.textContent = "請手動選取複製";
+        }
+      });
     }
 
     loadDashboard().catch(err => {
