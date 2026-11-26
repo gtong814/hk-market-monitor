@@ -341,4 +341,108 @@ def scan_daily_candidates(
             pd.notna(s20) and pd.notna(s50) and pd.notna(h20)
             and c > s20 and c > s50
             and c >= h20
-            and ret_1d
+            and ret_1d >= 0.04
+            and v > vp and vol_ratio >= 1.5
+            and close_pos >= 0.70
+        )
+
+        if is_breakout:
+            dist_sma20 = (c / s20 - 1.0) * 100
+            breakouts.append(
+                {
+                    "ticker": ticker,
+                    "name": stock_names.get(ticker, ""),
+                    "close": safe_round(c, 2),
+                    "change_pct": safe_round(ret_1d * 100, 2),
+                    "vol_ratio": safe_round(vol_ratio, 2),
+                    "close_pos": safe_round(close_pos * 100, 0),
+                    "metric_label": f"偏離20MA +{dist_sma20:.1f}%",
+                }
+            )
+            continue
+
+        # 2. 超跌反轉條件 (Reversal)
+        drawdown_15d = (cp / h15 - 1.0) if (pd.notna(h15) and h15 > 0) else 0.0
+        is_reversal = (
+            pd.notna(s20_p)
+            and drawdown_15d <= -0.10
+            and cp < s20_p
+            and ret_1d >= 0.03
+            and c > o
+            and close_pos >= 0.60
+            and v > vp and vol_ratio >= 1.2
+        )
+
+        if is_reversal:
+            reversals.append(
+                {
+                    "ticker": ticker,
+                    "name": stock_names.get(ticker, ""),
+                    "close": safe_round(c, 2),
+                    "change_pct": safe_round(ret_1d * 100, 2),
+                    "vol_ratio": safe_round(vol_ratio, 2),
+                    "close_pos": safe_round(close_pos * 100, 0),
+                    "metric_label": f"前15日回調 {drawdown_15d * 100:.1f}%",
+                }
+            )
+
+    breakouts.sort(key=lambda x: x["change_pct"] or 0, reverse=True)
+    reversals.sort(key=lambda x: x["change_pct"] or 0, reverse=True)
+
+    return {
+        "breakouts": breakouts[:20],
+        "reversals": reversals[:20],
+    }
+
+
+def main():
+    start_ts = time.time()
+    stock_names = fetch_stock_connect_universe(max_retries=3)
+    tickers = sorted(stock_names.keys())
+
+    ohlcv = download_ohlcv_in_batches(
+        tickers=tickers,
+        period="9mo",
+        batch_size=50,
+        max_retries=3,
+    )
+
+    breadth_df = calculate_market_monitor(ohlcv["Close"], ohlcv["Volume"])
+    candidates = scan_daily_candidates(
+        open_df=ohlcv["Open"],
+        high_df=ohlcv["High"],
+        low_df=ohlcv["Low"],
+        close_df=ohlcv["Close"],
+        volume_df=ohlcv["Volume"],
+        stock_names=stock_names,
+    )
+
+    recent = breadth_df.tail(90).reset_index()
+    recent["Date"] = pd.to_datetime(recent["Date"]).dt.strftime("%Y-%m-%d")
+    recent = recent.replace([np.inf, -np.inf], np.nan)
+
+    records = [
+        {k: (None if pd.isna(v) else v) for k, v in row.items()}
+        for row in recent.to_dict(orient="records")
+    ]
+
+    hkt = timezone(timedelta(hours=8))
+    output = {
+        "updated_at": datetime.now(hkt).strftime("%Y-%m-%d %H:%M HKT"),
+        "universe_size": len(tickers),
+        "history": records,
+        "candidates": candidates,
+    }
+
+    with open("data.json", "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2, allow_nan=False)
+
+    elapsed = time.time() - start_ts
+    print(
+        f"全部完成（耗時 {elapsed:.1f} 秒）｜股票池 {len(tickers)} 隻｜"
+        f"突破 {len(candidates['breakouts'])} 隻｜反轉 {len(candidates['reversals'])} 隻"
+    )
+
+
+if __name__ == "__main__":
+    main()
