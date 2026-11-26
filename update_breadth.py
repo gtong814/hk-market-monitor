@@ -38,19 +38,13 @@ def normalize_hk_ticker(raw_code: str) -> str | None:
     if not digits:
         return None
     num = int(digits)
-    # 僅保留 1 ~ 9999 的港元主板個股，排除 8xxxx 人民幣櫃台
     if 1 <= num <= 9999:
         return f"{num:04d}.HK"
     return None
 
 
 def fetch_stock_connect_universe(max_retries: int = 3) -> dict[str, str]:
-    """
-    三層容錯獲取港股通完整名單：
-    1. AkShare 即時抓取 -> 成功則更新本地快取 ggt_universe.json
-    2. 讀取倉庫內快取 ggt_universe.json
-    3. 退回保底權重股清單
-    """
+    """三層容錯獲取港股通完整名單：AkShare 即時抓取 -> 本地快取 -> 保底清單。"""
     for attempt in range(1, max_retries + 1):
         try:
             print(f"[名單同步] 第 {attempt}/{max_retries} 次透過 AkShare 抓取港股通成分股...")
@@ -69,7 +63,6 @@ def fetch_stock_connect_universe(max_retries: int = 3) -> dict[str, str]:
                 if yf_ticker:
                     stock_map[yf_ticker] = str(row[name_col]).strip()
 
-            # 確保抓到完整清單而非截斷資料
             if len(stock_map) >= 300:
                 with open(UNIVERSE_CACHE_FILE, "w", encoding="utf-8") as f:
                     json.dump(stock_map, f, ensure_ascii=False, indent=2)
@@ -82,7 +75,6 @@ def fetch_stock_connect_universe(max_retries: int = 3) -> dict[str, str]:
             if attempt < max_retries:
                 time.sleep(3 * attempt)
 
-    # 第二層：讀取本地快取名單
     if os.path.exists(UNIVERSE_CACHE_FILE):
         try:
             with open(UNIVERSE_CACHE_FILE, "r", encoding="utf-8") as f:
@@ -93,7 +85,6 @@ def fetch_stock_connect_universe(max_retries: int = 3) -> dict[str, str]:
         except Exception as exc:
             print(f"[名單同步] 讀取快取檔失敗：{exc}")
 
-    # 第三層：保底清單
     print(f"[名單同步] 啟用保底清單（共 {len(FALLBACK_STOCKS)} 隻）")
     return FALLBACK_STOCKS.copy()
 
@@ -178,7 +169,6 @@ def download_ohlcv_in_batches(
         if not success:
             failed_batches.append(batch_no)
 
-        # 批次之間加入隨機延遲，降低觸發 HTTP 429 限流風險
         if batch_no < total_batches:
             time.sleep(random.uniform(1.5, 3.0))
 
@@ -190,9 +180,7 @@ def download_ohlcv_in_batches(
         if not collected[f]:
             raise RuntimeError(f"未能成功下載任何 {f} 行情數據")
         df = pd.concat(collected[f], axis=1)
-        # 移除重複代碼並依日期排序
         df = df.loc[:, ~df.columns.duplicated()].sort_index()
-        # 移除完全無收盤資料的空列（如非港股交易日）
         merged[f] = df.dropna(how="all")
 
     print(f"[行情下載] 合併完成，共取得 {merged['Close'].shape[1]} 隻有效股票行情。")
@@ -237,6 +225,7 @@ def calculate_market_monitor(
     down_25pct_25d = ((ret_25d <= -0.25) & liquid_mask).sum(axis=1)
 
     active_stocks = liquid_mask.sum(axis=1)
+    up_4pct_pct = (up_4pct / active_stocks.replace(0, np.nan) * 100).round(2)
     down_4pct_pct = (down_4pct / active_stocks.replace(0, np.nan) * 100).round(2)
 
     sma40 = close_df.rolling(40, min_periods=40).mean()
@@ -248,6 +237,7 @@ def calculate_market_monitor(
             "Active_Stocks": active_stocks.astype(int),
             "Up_4pct": up_4pct.astype(int),
             "Down_4pct": down_4pct.astype(int),
+            "Up_4pct_Pct": up_4pct_pct,
             "Down_4pct_Pct": down_4pct_pct,
             "Ratio_5D": ratio_5d,
             "Up_25pct_25D": up_25pct_25d.astype(int),
@@ -257,7 +247,6 @@ def calculate_market_monitor(
         index=close_df.index,
     )
 
-    # 過濾偶發極端異常日（例如港股半日市或假期誤抓導致活躍股數遠低於常態）
     median_active = breadth_df["Active_Stocks"].tail(30).median()
     if pd.notna(median_active) and median_active > 0:
         breadth_df = breadth_df[breadth_df["Active_Stocks"] >= median_active * 0.3]
@@ -395,6 +384,138 @@ def scan_daily_candidates(
     }
 
 
+def generate_daily_insights(
+    breadth_df: pd.DataFrame,
+    candidates: dict,
+    universe_size: int,
+    heavy_sell_pct: float = 8.0,
+) -> dict:
+    """產出供網頁呈現的市況轉折提示、單日變化與可複製收市文字摘要。"""
+    df = breadth_df.sort_index()
+    recent_5d = df.tail(5)
+    latest = recent_5d.iloc[-1]
+    prev = recent_5d.iloc[-2] if len(recent_5d) >= 2 else latest
+    latest_date = pd.to_datetime(latest.name).strftime("%Y-%m-%d")
+
+    regime = str(latest.get("Regime", "Choppy"))
+    active = int(latest["Active_Stocks"])
+    up_4 = int(latest["Up_4pct"])
+    dn_4 = int(latest["Down_4pct"])
+    up_4_pct = float(latest["Up_4pct_Pct"]) if pd.notna(latest["Up_4pct_Pct"]) else 0.0
+    dn_4_pct = float(latest["Down_4pct_Pct"]) if pd.notna(latest["Down_4pct_Pct"]) else 0.0
+
+    r5_now = latest["Ratio_5D"]
+    r5_prev = prev["Ratio_5D"]
+    r5_diff = safe_round(r5_now - r5_prev, 2) if (pd.notna(r5_now) and pd.notna(r5_prev)) else None
+
+    up_25 = int(latest["Up_25pct_25D"])
+    dn_25 = int(latest["Down_25pct_25D"])
+    net_25 = up_25 - dn_25
+    sma40_pct = latest["Pct_Above_40SMA"]
+
+    # 1. 偵測關鍵轉折與異常警訊（level: danger / warning / success）
+    alerts = []
+    heavy_sell_days = int((recent_5d["Down_4pct_Pct"] >= heavy_sell_pct).sum())
+    if heavy_sell_days >= 2:
+        alerts.append(
+            {
+                "level": "danger",
+                "text": f"近 5 日出現 {heavy_sell_days} 次廣泛拋售（跌 4%+ 佔比 ≥ {heavy_sell_pct:.0f}%）",
+            }
+        )
+
+    if pd.notna(r5_now) and pd.notna(r5_prev):
+        if r5_prev >= 1.0 and r5_now < 1.0:
+            alerts.append({"level": "danger", "text": "5 日動能比率剛跌破 1.0，短線轉入空方主導"})
+        elif r5_prev < 2.0 and r5_now >= 2.0:
+            alerts.append({"level": "success", "text": "5 日動能比率重新站上 2.0，買盤動能轉強"})
+
+    if up_25 < dn_25 and int(prev["Up_25pct_25D"]) >= int(prev["Down_25pct_25D"]):
+        alerts.append({"level": "warning", "text": "25 日弱勢股家數反超強勢股，中期波段結構轉弱"})
+
+    if pd.notna(sma40_pct) and sma40_pct <= 20.0:
+        alerts.append(
+            {
+                "level": "warning",
+                "text": f"站上 40 日均線比例跌至 {sma40_pct:.1f}%（極端超賣區，留意反轉訊號）",
+            }
+        )
+
+    # 2. 組合純文字收市摘要（方便網頁檢視與一鍵複製）
+    if regime == "Bullish":
+        status_text = "🟢 多頭擴張（可積極追蹤突破）"
+    elif regime == "Correction":
+        status_text = "🔴 調整／偏空（防守為主，做多僅限反轉）"
+    else:
+        status_text = "🟡 震盪轉折（減倉並收緊止損）"
+
+    if pd.notna(r5_now) and r5_diff is not None:
+        arrow = "▲" if r5_diff > 0 else ("▼" if r5_diff < 0 else "▬")
+        r5_str = f"{r5_now:.2f} ({arrow}{abs(r5_diff):.2f})"
+    elif pd.notna(r5_now):
+        r5_str = f"{r5_now:.2f}"
+    else:
+        r5_str = "N/A"
+
+    sma40_str = f"{sma40_pct:.1f}%" if pd.notna(sma40_pct) else "N/A"
+    net_25_str = f"+{net_25}" if net_25 > 0 else f"{net_25}"
+
+    table_lines = ["Date   +4%  -4%  Ratio  25D(+/-)", "-" * 32]
+    for dt, row in recent_5d.iterrows():
+        d_str = pd.to_datetime(dt).strftime("%m-%d")
+        u4 = int(row["Up_4pct"])
+        d4 = int(row["Down_4pct"])
+        r5 = f"{row['Ratio_5D']:5.2f}" if pd.notna(row["Ratio_5D"]) else "  N/A"
+        s25 = f"{int(row['Up_25pct_25D'])}/{int(row['Down_25pct_25D'])}"
+        table_lines.append(f"{d_str}  {u4:3d}  {d4:3d}  {r5}  {s25:>8}")
+
+    def fmt_list(items, limit=8):
+        if not items:
+            return ["• 今日無符合條件標的"]
+        out = [
+            f"• {x['ticker']} {x['name']}｜${x['close']:.2f} (+{x['change_pct']:.1f}%｜量比{x['vol_ratio']:.1f}x)"
+            for x in items[:limit]
+        ]
+        if len(items) > limit:
+            out.append(f"  ...其餘 {len(items) - limit} 隻請見下方完整表格")
+        return out
+
+    breakouts = candidates.get("breakouts", [])
+    reversals = candidates.get("reversals", [])
+
+    summary_lines = [
+        f"📊 港股通 Market Monitor ({latest_date})",
+        f"狀態：{status_text}",
+        "",
+        f"📌 當日廣度快照（活躍 {active} / 總池 {universe_size} 隻）",
+        f"• 單日升 4%+：🟢 {up_4} 隻 ({up_4_pct:.1f}%)",
+        f"• 單日跌 4%+：🔴 {dn_4} 隻 ({dn_4_pct:.1f}%)",
+        f"• 5 日動能比率：{r5_str}",
+        f"• 25 日強/弱股：{up_25} vs {dn_25}（淨差 {net_25_str}）",
+        f"• 站上 40 日均線：{sma40_str}",
+        "",
+        "📈 近 5 日廣度趨勢",
+        *table_lines,
+    ]
+
+    if alerts:
+        summary_lines.extend(["", "⚠️ 市況提示"])
+        summary_lines.extend(f"• {a['text']}" for a in alerts)
+
+    if regime == "Correction":
+        summary_lines.extend(["", f"🎯 超跌反轉（調整期優先｜共 {len(reversals)} 隻）", *fmt_list(reversals)])
+        summary_lines.extend(["", f"🚀 放量突破（調整期慎追｜共 {len(breakouts)} 隻）", *fmt_list(breakouts, 5)])
+    else:
+        summary_lines.extend(["", f"🚀 放量突破（共 {len(breakouts)} 隻）", *fmt_list(breakouts)])
+        summary_lines.extend(["", f"🔄 超跌反轉（共 {len(reversals)} 隻）", *fmt_list(reversals, 5)])
+
+    return {
+        "ratio_5d_diff": r5_diff,
+        "alerts": alerts,
+        "summary_text": "\n".join(summary_lines),
+    }
+
+
 def main():
     start_ts = time.time()
     stock_names = fetch_stock_connect_universe(max_retries=3)
@@ -416,6 +537,11 @@ def main():
         volume_df=ohlcv["Volume"],
         stock_names=stock_names,
     )
+    insights = generate_daily_insights(
+        breadth_df=breadth_df,
+        candidates=candidates,
+        universe_size=len(tickers),
+    )
 
     recent = breadth_df.tail(90).reset_index()
     recent["Date"] = pd.to_datetime(recent["Date"]).dt.strftime("%Y-%m-%d")
@@ -432,6 +558,7 @@ def main():
         "universe_size": len(tickers),
         "history": records,
         "candidates": candidates,
+        "insights": insights,
     }
 
     with open("data.json", "w", encoding="utf-8") as f:
@@ -440,7 +567,8 @@ def main():
     elapsed = time.time() - start_ts
     print(
         f"全部完成（耗時 {elapsed:.1f} 秒）｜股票池 {len(tickers)} 隻｜"
-        f"突破 {len(candidates['breakouts'])} 隻｜反轉 {len(candidates['reversals'])} 隻"
+        f"突破 {len(candidates['breakouts'])} 隻｜反轉 {len(candidates['reversals'])} 隻｜"
+        f"提示 {len(insights['alerts'])} 則"
     )
 
 
