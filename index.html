@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>市場廣度監測儀表板 (Market Monitor)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4 md:p-8 font-sans">
+  <div class="max-w-6xl mx-auto space-y-6">
+
+    <!-- 標題與市況狀態燈號 -->
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-800 pb-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Market Monitor 市場廣度儀表板</h1>
+        <p id="updatedAt" class="text-sm text-slate-400 mt-1">正在載入最新數據...</p>
+      </div>
+      <div id="regimeBadge" class="px-4 py-2 rounded-full text-sm font-semibold w-fit bg-slate-800">
+        載入中...
+      </div>
+    </div>
+
+    <!-- 關鍵指標卡片 -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="text-xs text-slate-400">單日升 4%+ / 跌 4%+</div>
+        <div class="mt-2 text-2xl font-bold">
+          <span id="kpiUp4" class="text-emerald-400">-</span>
+          <span class="text-slate-600 mx-1">/</span>
+          <span id="kpiDown4" class="text-rose-400">-</span>
+        </div>
+        <div id="kpiDownPct" class="text-xs text-slate-400 mt-1">跌 4% 佔活躍股：-</div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="text-xs text-slate-400">5 日動能比率</div>
+        <div id="kpiRatio5d" class="mt-2 text-2xl font-bold text-sky-400">-</div>
+        <div class="text-xs text-slate-400 mt-1">多頭 &ge; 2.0 ｜ 偏空 &lt; 1.0</div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="text-xs text-slate-400">25 日強勢 / 弱勢股</div>
+        <div class="mt-2 text-2xl font-bold">
+          <span id="kpiUp25" class="text-emerald-400">-</span>
+          <span class="text-slate-600 mx-1">/</span>
+          <span id="kpiDown25" class="text-rose-400">-</span>
+        </div>
+        <div id="kpiNet25" class="text-xs text-slate-400 mt-1">強弱淨差：-</div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="text-xs text-slate-400">站上 40 日均線比例</div>
+        <div id="kpiSma40" class="mt-2 text-2xl font-bold text-amber-400">-</div>
+        <div id="kpiActive" class="text-xs text-slate-400 mt-1">當日活躍股數：-</div>
+      </div>
+    </div>
+
+    <!-- 圖表區 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">每日買賣壓力分佈（單日升 4%+ vs 跌 4%+）</h2>
+        <canvas id="dailyBarChart" height="160"></canvas>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">5 日動能比率走勢</h2>
+        <canvas id="ratioLineChart" height="160"></canvas>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <h2 class="text-sm font-semibold text-slate-300 mb-3">25 日波段強弱家數（±25%）與 40 日均線比例</h2>
+      <canvas id="midTermChart" height="100"></canvas>
+    </div>
+
+    <!-- 近 15 個交易日數據表 -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 overflow-x-auto">
+      <h2 class="text-sm font-semibold text-slate-300 mb-3">近 15 個交易日廣度紀錄</h2>
+      <table class="w-full text-sm text-left border-collapse">
+        <thead>
+          <tr class="border-b border-slate-800 text-slate-400">
+            <th class="py-2 px-3">日期</th>
+            <th class="py-2 px-3 text-right">升 4%+</th>
+            <th class="py-2 px-3 text-right">跌 4%+</th>
+            <th class="py-2 px-3 text-right">跌 4% 佔比</th>
+            <th class="py-2 px-3 text-right">5 日比率</th>
+            <th class="py-2 px-3 text-right">25 日強/弱</th>
+            <th class="py-2 px-3 text-right">站上 40MA</th>
+            <th class="py-2 px-3">市況判斷</th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody" class="divide-y divide-slate-800/60"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const fmt = (val, digits = 2) => (val === null || val === undefined ? "N/A" : Number(val).toFixed(digits));
+
+    const regimeMap = {
+      Bullish: {
+        badge: "🟢 多頭擴張 — 積極追蹤突破",
+        short: "多頭擴張",
+        badgeClass: "px-4 py-2 rounded-full text-sm font-semibold w-fit bg-emerald-500/20 text-emerald-300 border border-emerald-500/40",
+        textClass: "text-emerald-400"
+      },
+      Correction: {
+        badge: "🔴 調整／偏空 — 防守為主，做多僅限反轉",
+        short: "調整／偏空",
+        badgeClass: "px-4 py-2 rounded-full text-sm font-semibold w-fit bg-rose-500/20 text-rose-300 border border-rose-500/40",
+        textClass: "text-rose-400"
+      },
+      Choppy: {
+        badge: "🟡 震盪轉折 — 減倉並收緊止損",
+        short: "震盪轉折",
+        badgeClass: "px-4 py-2 rounded-full text-sm font-semibold w-fit bg-amber-500/20 text-amber-300 border border-amber-500/40",
+        textClass: "text-amber-400"
+      }
+    };
+
+    async function loadDashboard() {
+      const res = await fetch(`./data.json?t=${Date.now()}`);
+      if (!res.ok) throw new Error("找不到 data.json，請先到 GitHub Actions 手動執行一次工作流程。");
+      const data = await res.json();
+      const history = data.history || [];
+      if (!history.length) return;
+
+      const latest = history[history.length - 1];
+      document.getElementById("updatedAt").textContent =
+        `最新數據日期：${latest.Date} ｜ 更新時間：${data.updated_at} ｜ 股票池：${data.universe_size} 隻`;
+
+      // 市況標籤
+      const regimeInfo = regimeMap[latest.Regime] || regimeMap.Choppy;
+      const badge = document.getElementById("regimeBadge");
+      badge.textContent = regimeInfo.badge;
+      badge.className = regimeInfo.badgeClass;
+
+      // 指標卡數值
+      document.getElementById("kpiUp4").textContent = latest.Up_4pct;
+      document.getElementById("kpiDown4").textContent = latest.Down_4pct;
+      document.getElementById("kpiDownPct").textContent = `跌 4% 佔活躍股：${fmt(latest.Down_4pct_Pct, 1)}%`;
+      document.getElementById("kpiRatio5d").textContent = fmt(latest.Ratio_5D, 2);
+      document.getElementById("kpiUp25").textContent = latest.Up_25pct_25D;
+      document.getElementById("kpiDown25").textContent = latest.Down_25pct_25D;
+      const net25 = latest.Up_25pct_25D - latest.Down_25pct_25D;
+      document.getElementById("kpiNet25").textContent = `強弱淨差：${net25 >= 0 ? "+" : ""}${net25}`;
+      document.getElementById("kpiSma40").textContent = `${fmt(latest.Pct_Above_40SMA, 1)}%`;
+      document.getElementById("kpiActive").textContent = `當日活躍股數：${latest.Active_Stocks} 隻`;
+
+      const dates = history.map(d => d.Date.slice(5));
+      const commonGrid = { color: "rgba(148, 163, 184, 0.1)" };
+      const commonTicks = { color: "#94a3b8", maxTicksLimit: 10 };
+
+      // 圖表 1：買賣壓力雙向柱狀圖（綠升紅跌）
+      new Chart(document.getElementById("dailyBarChart"), {
+        type: "bar",
+        data: {
+          labels: dates,
+          datasets: [
+            { label: "單日升 4%+", data: history.map(d => d.Up_4pct), backgroundColor: "#10b981" },
+            { label: "單日跌 4%+", data: history.map(d => -d.Down_4pct), backgroundColor: "#f43f5e" }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: { stacked: true, grid: { display: false }, ticks: commonTicks },
+            y: { stacked: true, grid: commonGrid, ticks: { ...commonTicks, callback: v => Math.abs(v) } }
+          },
+          plugins: {
+            legend: { labels: { color: "#cbd5e1" } },
+            tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}：${Math.abs(ctx.raw)} 隻` } }
+          }
+        }
+      });
+
+      // 圖表 2：5 日動能比率折線圖
+      new Chart(document.getElementById("ratioLineChart"), {
+        type: "line",
+        data: {
+          labels: dates,
+          datasets: [
+            {
+              label: "5 日動能比率",
+              data: history.map(d => d.Ratio_5D),
+              borderColor: "#38bdf8",
+              backgroundColor: "rgba(56, 189, 248, 0.15)",
+              fill: true,
+              tension: 0.25,
+              pointRadius: 2
+            },
+            {
+              label: "多頭門檻 (2.0)",
+              data: dates.map(() => 2.0),
+              borderColor: "rgba(16, 185, 129, 0.6)",
+              borderDash: [5, 5],
+              pointRadius: 0
+            },
+            {
+              label: "偏空門檻 (1.0)",
+              data: dates.map(() => 1.0),
+              borderColor: "rgba(244, 63, 94, 0.6)",
+              borderDash: [5, 5],
+              pointRadius: 0
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: { grid: { display: false }, ticks: commonTicks },
+            y: { grid: commonGrid, ticks: commonTicks, beginAtZero: true }
+          },
+          plugins: { legend: { labels: { color: "#cbd5e1" } } }
+        }
+      });
+
+      // 圖表 3：25 日強弱家數與 40MA 比例
+      new Chart(document.getElementById("midTermChart"), {
+        type: "line",
+        data: {
+          labels: dates,
+          datasets: [
+            { label: "25 日升 25%+ 家數", data: history.map(d => d.Up_25pct_25D), borderColor: "#10b981", tension: 0.2, pointRadius: 1, yAxisID: "y" },
+            { label: "25 日跌 25%+ 家數", data: history.map(d => d.Down_25pct_25D), borderColor: "#f43f5e", tension: 0.2, pointRadius: 1, yAxisID: "y" },
+            { label: "站上 40 日均線 (%)", data: history.map(d => d.Pct_Above_40SMA), borderColor: "#fbbf24", borderDash: [4, 4], tension: 0.2, pointRadius: 1, yAxisID: "y1" }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: { grid: { display: false }, ticks: commonTicks },
+            y: { position: "left", grid: commonGrid, ticks: commonTicks },
+            y1: { position: "right", min: 0, max: 100, grid: { display: false }, ticks: { color: "#fbbf24", callback: v => `${v}%` } }
+          },
+          plugins: { legend: { labels: { color: "#cbd5e1" } } }
+        }
+      });
+
+      // 近 15 個交易日明細表（由新到舊）
+      const tbody = document.getElementById("historyTableBody");
+      const last15 = [...history].slice(-15).reverse();
+      tbody.innerHTML = last15.map(row => {
+        const info = regimeMap[row.Regime] || regimeMap.Choppy;
+        return `
+          <tr class="hover:bg-slate-800/40">
+            <td class="py-2 px-3 font-mono text-slate-300">${row.Date}</td>
+            <td class="py-2 px-3 text-right text-emerald-400 font-semibold">${row.Up_4pct}</td>
+            <td class="py-2 px-3 text-right text-rose-400 font-semibold">${row.Down_4pct}</td>
+            <td class="py-2 px-3 text-right text-slate-300">${fmt(row.Down_4pct_Pct, 1)}%</td>
+            <td class="py-2 px-3 text-right text-sky-400 font-semibold">${fmt(row.Ratio_5D, 2)}</td>
+            <td class="py-2 px-3 text-right">
+              <span class="text-emerald-400">${row.Up_25pct_25D}</span> /
+              <span class="text-rose-400">${row.Down_25pct_25D}</span>
+            </td>
+            <td class="py-2 px-3 text-right text-amber-400">${fmt(row.Pct_Above_40SMA, 1)}%</td>
+            <td class="py-2 px-3 font-semibold ${info.textClass}">${info.short}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    loadDashboard().catch(err => {
+      document.getElementById("updatedAt").textContent = err.message;
+    });
+  </script>
+</body>
+</html>
